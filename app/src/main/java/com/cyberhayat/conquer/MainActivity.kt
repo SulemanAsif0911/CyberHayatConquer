@@ -98,6 +98,7 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         Bus.sink = { s -> runOnUiThread { js("window.onNative&&onNative($s)") } }
         if (Perms.hasLocation(this)) startView()
+        if (TrackService.prefs(this).getBoolean("guard", false) && Net.hasSession(this)) GuardService.start(this)
         if (pageReady) js("window.onNativeResume&&onNativeResume()")
     }
 
@@ -126,6 +127,16 @@ class MainActivity : ComponentActivity() {
         @JavascriptInterface fun deviceId(): String {
             val id = Settings.Secure.getString(contentResolver, Settings.Secure.ANDROID_ID) ?: "unknown"
             return MessageDigest.getInstance("SHA-256").digest(("conquer:$id").toByteArray()).joinToString("") { "%02x".format(it) }
+        }
+
+        @JavascriptInterface fun setSession(url: String, secret: String, uid: String, token: String) {
+            Net.saveSession(this@MainActivity, url, secret, uid, token)
+            if (uid.isEmpty()) GuardService.stop(this@MainActivity)
+        }
+        @JavascriptInterface fun guardOn(): Boolean = TrackService.prefs(this@MainActivity).getBoolean("guard", false)
+        @JavascriptInterface fun guard(on: Boolean) {
+            TrackService.prefs(this@MainActivity).edit().putBoolean("guard", on).apply()
+            if (on && Net.hasSession(this@MainActivity)) GuardService.start(this@MainActivity) else GuardService.stop(this@MainActivity)
         }
 
         @JavascriptInterface fun permStatus(): String = Perms.status(this@MainActivity)

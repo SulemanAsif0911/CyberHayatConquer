@@ -37,6 +37,10 @@ export const Native = {
   requestPerm: (n) => { if (A) safe(() => A.requestPerm(n)); else { webWatch(); setTimeout(() => window.onPerms && window.onPerms(true), 300); } },
   openLocationSettings: () => { if (A) safe(() => A.openLocationSettings()); },
   viewStart: () => { if (!A) webWatch(); },          // on Android the shell starts it itself
+  // the phone itself sends the 20-second "ping" while you walk and polls for breaches, even with the screen off
+  setSession: (uid, token) => { if (A) safe(() => A.setSession(CONFIG.APPS_SCRIPT_URL, CONFIG.SHARED_SECRET, uid || '', token || '')); },
+  guardOn: () => (A ? safe(() => !!A.guardOn(), false) : false),
+  guard: (on) => { if (A) safe(() => A.guard(!!on)); },
   recActive: () => (A ? safe(() => !!A.recActive(), false) : web.rec),
   recStart() { if (A) return safe(() => !!A.recStart(), false); webWatch(); web.rec = true; web.pts = []; web.last = null; return true; },
   recPoints: (from) => (A ? safe(() => JSON.parse(String(A.recPoints(from))), []) : web.pts.slice(from)),

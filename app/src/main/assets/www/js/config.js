@@ -10,5 +10,5 @@ export const CONFIG = {
   // or self-host, because OSM's own servers are for light use. Use {z}/{x}/{y}.
   TILE_URL: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
   START_CENTER: [31.5204, 74.3587],      // Lahore, used until the first GPS fix
-  TERRITORY_MIN_ZOOM: 15               // territory is drawn from this zoom in
+  MAP_MIN_ZOOM: 11                       // territory is loaded from this zoom in (11 = a whole city)
 };

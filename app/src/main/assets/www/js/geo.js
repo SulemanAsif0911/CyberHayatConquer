@@ -2,10 +2,9 @@
 // GEO: shared by the app (js/geo.js) and the server (Code.gs). Edit apps-script/geo.js only,
 // then run  ./sync.sh  to copy it into the app and into Code.gs. This keeps the preview on the
 // phone identical to what the server confirms.
-// A point is [lat, lng, tSec, accuracyM, mock(0/1)].
+// A track point is [lat, lng, tSec, accuracyM, mock(0/1)].  A polygon is [[lat,lng], ...].
 // ============================================================
 const Geo = (function () {
-  const PER_DEG = 5000;                    // territory grid: 1/5000 degree = ~22 m x ~19 m at Lahore
   const R = 6371000, RAD = Math.PI / 180;
   const RULES = {
     MIN_PTS: 20, MIN_DUR_S: 120, MAX_DUR_S: 6 * 3600,
@@ -15,7 +14,7 @@ const Geo = (function () {
     CLOSE_M: 40,                           // finish within 40 m of the start to close the loop
     MIN_AREA: 500, MAX_AREA: 3e6,          // m2
     MIN_COMPACT: 0.004,                    // area / perimeter^2: refuses "out and back along one street"
-    MAX_CELLS: 12000
+    STORE_TOL_M: 1.5                       // stored outline keeps the walked shape within 1.5 m
   };
   const GROUPS = [
     { id: 'k', name: 'Kids', range: '6-12', min: 6, max: 12 },
@@ -35,10 +34,6 @@ const Geo = (function () {
     const x = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * RAD) * Math.cos(b[0] * RAD) * Math.sin(dLng / 2) ** 2;
     return 2 * R * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
   }
-  const cellOf = (lat, lng) => [Math.floor(lng * PER_DEG), Math.floor(lat * PER_DEG)];     // [cx, cy]
-  const cellBounds = (cx, cy) => [[cy / PER_DEG, cx / PER_DEG], [(cy + 1) / PER_DEG, (cx + 1) / PER_DEG]];
-  const cellAreaM2 = (cy) => (R * RAD / PER_DEG) ** 2 * Math.cos((cy + 0.5) / PER_DEG * RAD);
-
   function polygonArea(pts) {          // m2, local flat projection (fine below ~10 km)
     const n = pts.length; if (n < 3) return 0;
     const lat0 = pts[0][0], k = Math.cos(lat0 * RAD);
@@ -50,27 +45,70 @@ const Geo = (function () {
     }
     return Math.abs(s) / 2;
   }
-
-  /** Cells whose centre lies inside the walked loop (even-odd scanline). Returns null if absurdly large. */
-  function rasterize(pts) {
-    const n = pts.length; let minLat = 1e9, maxLat = -1e9;
-    for (let i = 0; i < n; i++) { if (pts[i][0] < minLat) minLat = pts[i][0]; if (pts[i][0] > maxLat) maxLat = pts[i][0]; }
-    const cy0 = Math.floor(minLat * PER_DEG), cy1 = Math.floor(maxLat * PER_DEG);
-    if (cy1 - cy0 > 1500) return null;
-    const out = [];
-    for (let cy = cy0; cy <= cy1; cy++) {
-      const y = (cy + 0.5) / PER_DEG, xs = [];
-      for (let i = 0, j = n - 1; i < n; j = i++) {
-        const a = pts[j], b = pts[i];
-        if ((a[0] <= y && b[0] > y) || (b[0] <= y && a[0] > y)) xs.push(a[1] + (y - a[0]) / (b[0] - a[0]) * (b[1] - a[1]));
+  /** even-odd point in polygon; pt=[lat,lng] */
+  function inside(pt, poly) {
+    let c = false; const y = pt[0], x = pt[1];
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const a = poly[j], b = poly[i];
+      if ((a[0] > y) !== (b[0] > y) && x < (b[1] - a[1]) * (y - a[0]) / (b[0] - a[0]) + a[1]) c = !c;
+    }
+    return c;
+  }
+  function bboxOf(poly) {
+    let s = 90, w = 180, n = -90, e = -180;
+    for (let i = 0; i < poly.length; i++) { const p = poly[i]; if (p[0] < s) s = p[0]; if (p[0] > n) n = p[0]; if (p[1] < w) w = p[1]; if (p[1] > e) e = p[1]; }
+    return { minLat: s, minLng: w, maxLat: n, maxLng: e };
+  }
+  const overlap = (a, b) => !(a.maxLat < b.minLat || a.minLat > b.maxLat || a.maxLng < b.minLng || a.minLng > b.maxLng);
+  function centroid(poly) {            // area-weighted centre [lat,lng]
+    const n = poly.length; let a = 0, cx = 0, cy = 0;
+    const lat0 = poly[0][0], lng0 = poly[0][1];
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const x1 = poly[j][1] - lng0, y1 = poly[j][0] - lat0, x2 = poly[i][1] - lng0, y2 = poly[i][0] - lat0, f = x1 * y2 - x2 * y1;
+      a += f; cx += (x1 + x2) * f; cy += (y1 + y2) * f;
+    }
+    if (Math.abs(a) < 1e-18) return [poly[0][0], poly[0][1]];
+    return [lat0 + cy / (3 * a), lng0 + cx / (3 * a)];
+  }
+  /** Douglas-Peucker in metres; keeps the walked shape, drops redundant points. Returns [[lat,lng],...] */
+  function simplify(pts, tolM) {
+    const n = pts.length; if (n < 4 || !(tolM > 0)) return pts.map((p) => [p[0], p[1]]);
+    const k = Math.cos(pts[0][0] * RAD) * R * RAD, m = R * RAD;
+    const X = pts.map((p) => p[1] * k), Y = pts.map((p) => p[0] * m);
+    const keep = new Uint8Array(n); keep[0] = keep[n - 1] = 1;
+    const st = [[0, n - 1]];
+    while (st.length) {
+      const [i, j] = st.pop(); let md = 0, mi = -1;
+      const dx = X[j] - X[i], dy = Y[j] - Y[i], L = Math.hypot(dx, dy);
+      for (let t = i + 1; t < j; t++) {
+        const d = L === 0 ? Math.hypot(X[t] - X[i], Y[t] - Y[i]) : Math.abs(dy * X[t] - dx * Y[t] + X[j] * Y[i] - Y[j] * X[i]) / L;
+        if (d > md) { md = d; mi = t; }
       }
-      xs.sort((p, q) => p - q);
-      for (let k = 0; k + 1 < xs.length; k += 2) {
-        const c0 = Math.ceil(xs[k] * PER_DEG - 0.5), c1 = Math.floor(xs[k + 1] * PER_DEG - 0.5);
-        for (let cx = c0; cx <= c1; cx++) { out.push([cx, cy]); if (out.length > RULES.MAX_CELLS) return null; }
+      if (md > tolM && mi > 0) { keep[mi] = 1; st.push([i, mi], [mi, j]); }
+    }
+    const out = []; for (let i = 0; i < n; i++) if (keep[i]) out.push([pts[i][0], pts[i][1]]);
+    return out;
+  }
+  /**
+   * Visible area of `poly` once newer polygons are painted on top of it (newer always wins).
+   * newer = [{bbox, poly}]. Sampled on a grid of at most ~3000 points, so the error is about 1 %.
+   */
+  function remainingM2(poly, areaM2, newer) {
+    const bb = bboxOf(poly), hit = newer.filter((q) => overlap(bb, q.bbox));
+    if (!hit.length) return areaM2;
+    const step = Math.max(3, Math.sqrt(areaM2 / 3000)), dLat = step / (R * RAD), dLng = step / (R * RAD * Math.cos((bb.minLat + bb.maxLat) / 2 * RAD));
+    let total = 0, free = 0;
+    for (let la = bb.minLat + dLat / 2; la < bb.maxLat; la += dLat) {
+      for (let lo = bb.minLng + dLng / 2; lo < bb.maxLng; lo += dLng) {
+        const pt = [la, lo];
+        if (!inside(pt, poly)) continue;
+        total++;
+        let covered = false;
+        for (let q = 0; q < hit.length; q++) { const h = hit[q]; if (la >= h.bbox.minLat && la <= h.bbox.maxLat && lo >= h.bbox.minLng && lo <= h.bbox.maxLng && inside(pt, h.poly)) { covered = true; break; } }
+        if (!covered) free++;
       }
     }
-    return out;
+    return total ? areaM2 * free / total : areaM2;
   }
 
   /** Judges a recorded walk. integrity=false: not a genuine on-foot recording. claimable=true: may claim land. */
@@ -111,6 +149,6 @@ const Geo = (function () {
     o.claimable = P.length === 0;
     return o;
   }
-  return { PER_DEG, RULES, GROUPS, ageGroup, hav, cellOf, cellBounds, cellAreaM2, polygonArea, rasterize, analyze };
+  return { RULES, GROUPS, ageGroup, hav, polygonArea, inside, bboxOf, overlap, centroid, simplify, remainingM2, analyze };
 })();
 if (typeof window !== 'undefined') window.Geo = Geo;

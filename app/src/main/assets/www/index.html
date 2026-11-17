@@ -42,6 +42,8 @@ try{if(window.AndroidNative&&AndroidNative.getInsets){var v=String(AndroidNative
     <label>Nickname <small>(public, no real name)</small><input id="r-nick" autocapitalize="none" maxlength="16" required></label>
     <label>Year of birth<input id="r-year" type="number" inputmode="numeric" min="1900" max="2030" required></label>
     <div class="agebox" id="r-group">Enter your year of birth to see your age group.</div>
+    <div class="field-title">Pick your emblem <small>(shown on the land you conquer)</small></div>
+    <div id="r-avatar" class="avatar-pick"></div>
     <label>PIN <small>(4 to 6 digits)</small><input id="r-pin" type="password" inputmode="numeric" maxlength="6" required></label>
     <label class="check" id="r-parent-row" hidden><input type="checkbox" id="r-parent"><span>A parent or guardian knows I use this app and agrees.</span></label>
     <button class="btn primary" type="submit">Create account</button>
@@ -70,7 +72,9 @@ try{if(window.AndroidNative&&AndroidNative.getInsets){var v=String(AndroidNative
   <div class="mapui top" id="map-top">
     <div class="pill" id="m-group"></div>
     <div class="pill dim" id="m-area"></div>
+    <button class="pill btn-pill" id="btn-players">Players</button>
   </div>
+  <button class="banner" id="alert-banner" hidden></button>
   <div class="mapui hint" id="m-hint" hidden>Zoom in to see territory</div>
   <button class="fab" id="btn-center" aria-label="Centre on me"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg></button>
 
@@ -93,8 +97,9 @@ try{if(window.AndroidNative&&AndroidNative.getInsets){var v=String(AndroidNative
   <div class="hero">
     <div class="eyebrow"><span class="eyebrow-dot"></span>Leaderboard</div>
     <h2 id="rk-title">Your age group</h2>
-    <p class="muted">You only compete with people in your own age group.</p>
+    <p class="muted">You only compete with people in your own age group. Tap a player to see their land on the map.</p>
   </div>
+  <button class="btn" id="btn-all">See everyone on the map</button>
   <div class="seg" id="rk-tabs"><button class="on" data-m="area">Territory</button><button data-m="distance">Distance</button></div>
   <div id="rk-list" class="list"></div>
 </section>
@@ -104,9 +109,11 @@ try{if(window.AndroidNative&&AndroidNative.getInsets){var v=String(AndroidNative
   <div class="hero">
     <div class="eyebrow"><span class="eyebrow-dot"></span>Profile</div>
     <h2 id="me-nick"></h2>
-    <div class="pill" id="me-group" style="align-self:flex-start"></div>
+    <div class="who"><div class="avatar big" id="me-avatar"></div><div><div class="pill" id="me-group"></div><div class="muted" id="me-title" style="margin-top:6px"></div></div></div>
   </div>
   <div class="stats" id="me-stats"></div>
+  <div class="card toggle"><div><b>Guard mode</b><span>Alerts you when someone walks inside your land, even with the app closed. Uses some battery.</span></div><button class="switch" id="sw-guard" role="switch" aria-checked="false"><i></i></button></div>
+  <button class="btn" id="btn-avatar">Change emblem</button>
   <h3>Recent walks</h3>
   <div id="me-hist" class="list"></div>
   <button class="btn" id="btn-logout">Sign out</button>

@@ -12,7 +12,11 @@ import android.os.IBinder
 import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 /** Receives everything the service wants the page to see while the app is open. */
 object Bus {
@@ -45,6 +49,8 @@ class TrackService : Service() {
     private var wl: PowerManager.WakeLock? = null
     private var lastKept: DoubleArray? = null
     private var sinceSave = 0
+    private var pinger: ScheduledExecutorService? = null
+    @Volatile private var lastFix: Locator.Fix? = null
 
     override fun onBind(i: Intent?): IBinder? = null
 
@@ -81,11 +87,30 @@ class TrackService : Service() {
             loc = Locator(this, 25f, { f -> onFix(f) }, { on -> Bus.send("{\"t\":\"gps\",\"on\":$on}") })
             loc?.start()
         }
+        if (pinger == null) {
+            // every 20 s tell the server where we are; if we stand inside someone's land, they get an alert
+            pinger = Executors.newSingleThreadScheduledExecutor().also {
+                it.scheduleWithFixedDelay({ ping() }, 8, 20, TimeUnit.SECONDS)
+            }
+        }
         prefs(this).edit().putBoolean("rec", true).apply()
         return START_STICKY
     }
 
+    private fun ping() {
+        try {
+            val f = lastFix ?: return
+            if (!Net.hasSession(this)) return
+            if (System.currentTimeMillis() / 1000 - f.tSec > 60) return          // stale fix
+            val r = Net.post(this, JSONObject().put("action", "ping").put("lat", f.lat).put("lng", f.lng)) ?: return
+            val inside = r.optJSONObject("inside")
+            val owner = if (inside != null && !inside.optBoolean("mine")) inside.optString("nick") else ""
+            Bus.send("{\"t\":\"ping\",\"owner\":${JSONObject.quote(owner)}}")
+        } catch (_: Exception) {}
+    }
+
     private fun onFix(f: Locator.Fix) {
+        lastFix = f
         val last = lastKept
         if (last != null) {
             val d = FloatArray(1)
@@ -126,6 +151,7 @@ class TrackService : Service() {
 
     override fun onDestroy() {
         loc?.stop(); loc = null
+        pinger?.shutdownNow(); pinger = null
         try { wl?.release() } catch (_: Exception) {}
         wl = null
         if (!discard) synchronized(pts) { save() }
